@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
-import { KEY, DAY, ROOMS, rnd, shape, key, fmtD, makeSim, persist } from "./data";
+import { KEY, DAY, rnd, shape, key, fmtD, makeSim, addRoom, persist } from "./data";
+import RoomManager from "./RoomManager";
 import { Spark, Bars, Live } from "./charts";
 import "./styles.css";
 
@@ -18,8 +19,9 @@ function App() {
   useEffect(() => {
     if (!live) return;
     const t = setInterval(() => {
+      const s = S.current, st = s.store;
       const now = new Date(), tk = key(now), hr = now.getHours(), w = now.getDay() % 6 === 0;
-      if (!st.days[tk]) st.days[tk] = Object.fromEntries(ROOMS.map(r => [r.id, 0]));
+      if (!st.days[tk]) st.days[tk] = Object.fromEntries(st.rooms.map(r => [r.id, 0]));
       s.rooms.forEach(r => {
         if (r.anom <= 0 && Math.random() < 0.0005) { r.anom = 25; r.mult = rnd(1.8, 2.6); }
         const exp = r.base * shape(r.type, hr, w);
@@ -46,14 +48,14 @@ function App() {
   const base = new Date(); base.setHours(12, 0, 0, 0);
   const dayKey = i => key(base.getTime() - i * DAY);
   const sumRoom = (id, n, k) => { let t = 0; for (let i = 1; i <= n; i++) t += (st.days[dayKey(k * n + i)] || {})[id] || 0; return t; };
-  const sumAll = (n, k) => ROOMS.reduce((a, r) => a + sumRoom(r.id, n, k), 0);
+  const sumAll = (n, k) => st.rooms.reduce((a, r) => a + sumRoom(r.id, n, k), 0);
   const pc = (a, b) => (b ? ((a - b) / b) * 100 : 0);
   const money = v => st.cur + v.toFixed(2);
   const sign = v => (v > 0 ? "+" : "") + v.toFixed(0) + "%";
   const chg = v => <span className={v > 15 ? "bad" : v < -10 ? "ok" : ""}>{sign(v)}</span>;
 
   const total = s.rooms.reduce((a, r) => a + r.kw, 0);
-  const today = ROOMS.reduce((a, r) => a + ((st.days[key(new Date())] || {})[r.id] || 0), 0);
+  const today = st.rooms.reduce((a, r) => a + ((st.days[key(new Date())] || {})[r.id] || 0), 0);
   const yest = sumAll(1, 0);
   const avg30 = sumAll(30, 0) / 30;
   const active = s.rooms.filter(r => r.active);
@@ -66,7 +68,7 @@ function App() {
   const curP = vals[B - 1], prvP = vals[B - 2];
   const pname = { daily: ["Yesterday", "Day before"], weekly: ["Last 7 days", "Previous 7 days"], monthly: ["Last 30 days", "Previous 30 days"] }[per];
 
-  const rep = ROOMS.map(r => ({ ...r, kwh: sumRoom(r.id, range, 0), prev: sumRoom(r.id, range, 1) })).sort((a, b) => b.kwh - a.kwh);
+  const rep = st.rooms.map(r => ({ ...r, kwh: sumRoom(r.id, range, 0), prev: sumRoom(r.id, range, 1) })).sort((a, b) => b.kwh - a.kwh);
   const repTot = rep.reduce((a, r) => a + r.kwh, 0), repPrev = rep.reduce((a, r) => a + r.prev, 0);
   const rise = [...rep].sort((a, b) => (b.kwh - b.prev) - (a.kwh - a.prev))[0];
   const drop = [...rep].sort((a, b) => (a.kwh - a.prev) - (b.kwh - b.prev))[0];
@@ -77,6 +79,8 @@ function App() {
   const copy = () => { try { navigator.clipboard.writeText(summary).then(() => setCopied("Copied")); } catch (e) { setCopied("Copy not available here"); } };
   const setLimit = (id, v) => { st.limits[id] = Math.max(0.1, +v || 0.1); persist(st); rf(); };
   const reset = () => { try { localStorage.removeItem(KEY); } catch (e) {} S.current = makeSim(); rf(); };
+  const onAdd = room => { addRoom(s, room); rf(); };
+  const onRemove = id => { removeRoom(s, id); rf(); };
   const T = (id, label) => <button className={tab === id ? "on" : ""} onClick={() => setTab(id)}>{label}{id === "alerts" && active.length ? ` (${active.length})` : ""}</button>;
 
   return (
@@ -91,7 +95,7 @@ function App() {
           <button onClick={() => setLive(!live)}>{live ? "Pause" : "Resume"}</button>
         </div>
       </header>
-      <nav>{T("live", "Live")}{T("compare", "Compare")}{T("report", "Report")}{T("alerts", "Alerts and limits")}</nav>
+      <nav>{T("live", "Live")}{T("compare", "Compare")}{T("report", "Report")}{T("rooms", "Rooms")}{T("alerts", "Alerts and limits")}</nav>
 
       {active.length > 0 && tab !== "alerts" && (
         <div className="banner" role="alert">
@@ -132,7 +136,7 @@ function App() {
         <div className="card tablewrap">
           <h2>By room</h2>
           <table><thead><tr><th>Room</th><th className="n">{pname[0]} (kWh)</th><th className="n">{pname[1]} (kWh)</th><th className="n">Change</th></tr></thead>
-            <tbody>{ROOMS.map(r => ({ r, a: sumRoom(r.id, N, 0), b: sumRoom(r.id, N, 1) })).sort((x, y) => y.a - x.a).map(({ r, a, b }) => (
+            <tbody>{st.rooms.map(r => ({ r, a: sumRoom(r.id, N, 0), b: sumRoom(r.id, N, 1) })).sort((x, y) => y.a - x.a).map(({ r, a, b }) => (
               <tr key={r.id}><td>{r.name}</td><td className="n">{a.toFixed(1)}</td><td className="n">{b.toFixed(1)}</td><td className="n">{chg(pc(a, b))}</td></tr>))}</tbody></table>
         </div>
       </>}
@@ -169,6 +173,8 @@ function App() {
         </div>
       </>}
 
+      {tab === "rooms" && <RoomManager rooms={st.rooms} limits={st.limits} today={st.days[key(new Date())] || {}} onAdd={onAdd} onRemove={onRemove} />}
+
       {tab === "alerts" && <>
         <div className="two">
           <div className="card">
@@ -190,7 +196,7 @@ function App() {
           <h2>Room limits</h2>
           <div className="sub note">You get an alert when a room reaches its limit, or uses over 1.5 times its usual load for the time of day.</div>
           <table><thead><tr><th>Room</th><th>Limit (kW)</th></tr></thead>
-            <tbody>{ROOMS.map(r => <tr key={r.id}><td>{r.name}</td><td><input className="w-md" type="number" step="0.1" min="0.1" aria-label={r.name + " limit in kW"} value={st.limits[r.id]} onChange={e => setLimit(r.id, e.target.value)} /></td></tr>)}</tbody></table>
+            <tbody>{st.rooms.map(r => <tr key={r.id}><td>{r.name}</td><td><input className="w-md" type="number" step="0.1" min="0.1" aria-label={r.name + " limit in kW"} value={st.limits[r.id]} onChange={e => setLimit(r.id, e.target.value)} /></td></tr>)}</tbody></table>
         </div>
         <div className="card">
           <h2>Cost settings</h2>
@@ -201,7 +207,7 @@ function App() {
           </div>
         </div>
       </>}
-      <p className="sub">Demo mode: readings are simulated. Daily history, limits and alerts are saved in this browser.</p>
+      
     </div>
   );
 }
